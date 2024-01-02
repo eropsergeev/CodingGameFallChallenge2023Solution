@@ -171,7 +171,7 @@ struct Rect {
         return ret;
     }
     bool contains(Vec2i p) const {
-        return p1.x <= p.x && p.x < p2.x && p1.y <= p.y && p.y < p1.y;
+        return p1.x <= p.x && p.x <= p2.x && p1.y <= p.y && p.y <= p1.y;
     }
     int area() const {
         return width() * height();
@@ -193,7 +193,7 @@ struct Rect {
     }
 };
 
-ostream &operator<<(ostream &out, const Rect &r) {
+[[maybe_unused]] ostream &operator<<(ostream &out, const Rect &r) {
     return out << "(" << r.p1 << "), (" << r.p2 << ")";
 }
 
@@ -386,12 +386,12 @@ constexpr int y_max[TYPES] = {5000, 7500, 10000};
 constexpr int MAX_TICK = 200, SAVE_DEPTH = 500;
 
 struct SmitsiMaxNode {
-    static constexpr size_t MAX_NODES = numeric_limits<uint16_t>::max() - 1;
+    static constexpr size_t MAX_NODES = 10'000'000;
     static constexpr size_t MOVES = COLORS * TYPES + 1;
     static SmitsiMaxNode nodes[MAX_NODES];
-    static uint16_t allocated;
+    static uint32_t allocated;
 
-    using NodePtr = SmallPtr<SmitsiMaxNode, nodes, uint16_t>;
+    using NodePtr = SmallPtr<SmitsiMaxNode, nodes, uint32_t>;
 
     static NodePtr newNode() {
         nodes[allocated] = {};
@@ -414,7 +414,7 @@ struct SmitsiMaxNode {
     }
 
     void print(int k = 0) {
-        cout << string(k, '\t') << "score = " << score << " visits = " << visits << " (" << score / visits << ")\n";
+        cerr << string(k, '\t') << "score = " << score << " visits = " << visits << " (" << score / visits << ")\n";
         for (auto c : children) {
             if (c) {
                 c->print(k + 1);
@@ -424,7 +424,7 @@ struct SmitsiMaxNode {
 };
 
 SmitsiMaxNode SmitsiMaxNode::nodes[SmitsiMaxNode::MAX_NODES];
-uint16_t SmitsiMaxNode::allocated = 0;
+uint32_t SmitsiMaxNode::allocated = 0;
 
 [[gnu::always_inline]] inline double uct(SmitsiMaxNode::NodePtr v, int total_visits) {
     return v->score / v->visits + sqrt(2 * log(total_visits) / v->visits);
@@ -534,11 +534,11 @@ int main() {
     int fishes_count;
     cin >> fishes_count;
 
-    [[maybe_unused]] bool have[COLORS][TYPES] = {};
-    [[maybe_unused]] bool foe_have[COLORS][TYPES] = {};
+    array<array<bool, TYPES>, COLORS> have{};
+    array<array<bool, TYPES>, COLORS> foe_have{};
     set<int> have_id, foe_have_id;
-    bool semi_have[COLORS][TYPES] = {};
-    [[maybe_unused]] bool foe_semi_have[COLORS][TYPES] = {};
+    array<array<bool, TYPES>, COLORS> semi_have{};
+    array<array<bool, TYPES>, COLORS> foe_semi_have{};
     set<int> semi_have_id, foe_semi_have_id;
 
     map<int, Fish> fishes;
@@ -650,6 +650,9 @@ int main() {
             foe_have[c][t] = 1;
             foe_have_id.emplace(x);
         }
+
+        semi_have_id = have_id;
+        semi_have = have;
 
         for (auto [d, f] : drone_scans) {
             auto [_, c, t] = fishes[f];
@@ -764,8 +767,6 @@ int main() {
         array<SmallVec<int, COLORS * TYPES>, 4> initial_drone_scans;
 
         for (auto [d, f] : drone_scans) {
-            if (find(my_scans.begin(), my_scans.end(), f) != my_scans.end())
-                continue;
             int drone_index = find(drone_to_id.begin(), drone_to_id.end(), d) - drone_to_id.begin();
             int fish_index = find_if(flat_fishes.begin(), flat_fishes.end(), [f](auto &fish) {
                 return fish.id == f;
@@ -791,201 +792,226 @@ int main() {
                 ++depth;
             }
         }
-        depth = (depth + 1) / 2 * 2;
+        depth = max((depth + 1) / 2 * 2, 1);
 
         cerr << "depth = " << depth << "\n";
 
-        if (depth) {
-            SmitsiMaxNode::allocated = 0;
-            array<SmitsiMaxNode::NodePtr, 4> roots;
-            for (auto &p : roots) {
-                p = SmitsiMaxNode::newNode();
-            }
+        array<SmitsiMaxNode::NodePtr, 4> roots;
 
-            auto start = clock();
-            for (int i = 0; i < 1000; ++i) {
-                auto cur = roots;
-                array<array<bool, COLORS * TYPES>, 2> used{};
-                for (int i = 0; i < COLORS * TYPES; ++i) {
-                    auto [_, c, t] = flat_fishes[i];
-                    if (semi_have[c][t] || invalid[i])
-                        used[0][i] = 1;
-                    if (foe_semi_have[c][t] || invalid[i])
-                        used[1][i] = 1;
-                }
-                array<SmallVec<int, COLORS * TYPES>, 4> moves; 
-                array<bool, 4> stoped{};
-                array<int, 2> stoped_count{};
-                bool stop = 0;
-                for (int t = 0; t < depth && !stop; ++t) {
-                    for (int drone = 0; drone < 4; ++drone) {
-                        if (stoped[drone])
-                            break;
-                        int player = drone & 1;
-                        bool last_is_up = moves[drone].size() && !moves[drone].back();
+        SmitsiMaxNode::allocated = 0;
+        for (auto &p : roots) {
+            p = SmitsiMaxNode::newNode();
+        }
 
-                        moves[drone].emplace_back();
-                        SmitsiMaxNode::NodePtr best = nullptr;
-                        unsigned r = rnd() % SmitsiMaxNode::MOVES;
-                        auto check_null = [&][[gnu::always_inline]](unsigned f, unsigned t)->bool {
-                            for (unsigned i = f; i < t; ++i) {
-                                if (i && used[player][i - 1] || !i && last_is_up)
-                                    continue;
-                                if (!cur[drone]->children[i]) {
-                                    best = cur[drone]->get_child(i);
-                                    moves[drone].back() = i;
-                                    break;
-                                }
-                            }
-                            return best;
-                        };
-                        if (!check_null(r, SmitsiMaxNode::MOVES) && !check_null(0, r)) {
-                            double best_uct = 0;
-                            for (size_t i = 0; i < SmitsiMaxNode::MOVES; ++i) {
-                                if (i && used[player][i - 1] || !i && last_is_up)
-                                    continue;
-                                double u = uct(cur[drone]->children[i], cur[drone]->visits);
-                                if (!best || u > best_uct) {
-                                    best_uct = u;
-                                    best = cur[drone]->children[i];
-                                    moves[drone].back() = i;
-                                }
-                            }
-                        }
-                        if (!best) {
-                            stoped[drone] = 1;
-                            ++stoped_count[player];
-                            if (stoped_count[player] == 2)
-                                stop = 1;
-                            break;
-                        }
-                        cur[drone] = best;
-                        if (moves[drone].back())
-                            used[player][moves[drone].back() - 1] = 1;
-                    }
-                }
-                used = {};
-                for (int i = 0; i < COLORS * TYPES; ++i) {
-                    auto [_, c, t] = flat_fishes[i];
-                    if (have[c][t])
-                        used[0][i] = 1;
-                    if (foe_have[c][t])
-                        used[1][i] = 1;
-                }
-                array<int, 2> score{};
-                auto found_of_type = intitial_found_of_type;
-                auto found_of_color = intitial_found_of_color;
-                auto drone_scans = initial_drone_scans;
-                auto coords = initial_coords;
+        array<array<bool, COLORS * TYPES>, 2> initial_invalid_fish{};
+        for (int i = 0; i < COLORS * TYPES; ++i) {
+            auto [_, c, t] = flat_fishes[i];
+            if (semi_have[c][t] || invalid[i])
+                initial_invalid_fish[0][i] = 1;
+            if (foe_semi_have[c][t] || invalid[i])
+                initial_invalid_fish[1][i] = 1;
+        }
 
-                array<unsigned, 4> cur_move{};
-                array<int, 4> move_time{};
+        auto start = clock();
+        array<double, 2> avg_score{};
+        for (int i = 0; i < 2000; ++i) {
+            auto cur = roots;
+            auto used = initial_invalid_fish;
 
-                auto recalc = [&](int i) {
-                    if (cur_move[i] == moves[i].size()) {
-                        move_time[i] = MAX_TICK;
-                        return;
-                    }
-                    int m = moves[i][cur_move[i]];
-                    int player = i & 1;
-                    if (m == 0) {
-                        move_time[i] += max(1, (coords[i].y - SAVE_DEPTH + DRONE_SPEED - 1) / DRONE_SPEED);
-                        coords[i].y = SAVE_DEPTH;
-                        for (auto x : drone_scans[i]) {
-                            if (!used[player][x]) {
-                                used[player][x] = 1;
-                                auto &[_, c, t] = flat_fishes[x];
-                                ++found_of_color[player][c];
-                                ++found_of_type[player][t];
-                                int add = (t + 1) * 2;
-                                if (!used[!player][x]) {
-                                    add *= 2;
-                                }
-                                bool foe_have_c = (found_of_color[!player][c] == TYPES);
-                                bool foe_have_t = (found_of_type[!player][t] == COLORS);
-                                if (found_of_color[player][c] == TYPES) {
-                                    add += TYPES * (foe_have_c ? 1 : 2);
-                                }
-                                if (found_of_type[player][t] == COLORS) {
-                                    add += COLORS * (foe_have_t ? 1 : 2);
-                                }
-                                score[player] += add;
-                            }
-                        }
-                        drone_scans[i].clear();
-                        return;
-                    }
-                    --m;
-                    move_time[i] += ceil((coords[i] - flat_pos[m]).len() / DRONE_SPEED);
-                    coords[i] = flat_pos[m];
-                    drone_scans[i].emplace_back(m);
-                };
-
-                for (int i = 0; i < 4; ++i)
-                    recalc(i);
-
-                while (1) {
-                    auto mn = min_element(move_time.begin(), move_time.end()) - move_time.begin();
-                    if (move_time[mn] >= MAX_TICK)
-                        break;
-                    ++cur_move[mn];
-                    recalc(mn);
-                }
-
-                array<double, 2> normalized_scores;
-                for (int i = 0; i < 2; ++i) {
-                    normalized_scores[i] = static_cast<double>(score[i]) / (score[0] + score[1]);
-                }
-
+            array<SmallVec<int, COLORS * TYPES>, 4> moves; 
+            array<bool, 4> stoped{};
+            int active = 4;
+            for (int t = 0; t < depth && active; ++t) {
                 for (int drone = 0; drone < 4; ++drone) {
+                    if (stoped[drone])
+                        break;
                     int player = drone & 1;
-                    while (cur[drone]) {
-                        // cerr << drone << ": " << cur[drone].pos << "\n";
-                        cur[drone]->visits++;
-                        cur[drone]->score += normalized_scores[player];
-                        cur[drone] = cur[drone]->parent;
+                    bool last_is_up = moves[drone].size() && !moves[drone].back();
+
+                    moves[drone].emplace_back();
+                    SmitsiMaxNode::NodePtr best = nullptr;
+                    unsigned r = rnd() % SmitsiMaxNode::MOVES;
+                    auto check_null = [&][[gnu::always_inline]](unsigned f, unsigned t)->bool {
+                        for (unsigned i = f; i < t; ++i) {
+                            if (i && used[player][i - 1] || !i && last_is_up)
+                                continue;
+                            if (!cur[drone]->children[i]) {
+                                best = cur[drone]->get_child(i);
+                                moves[drone].back() = i;
+                                break;
+                            }
+                        }
+                        return best;
+                    };
+                    if (!check_null(r, SmitsiMaxNode::MOVES) && !check_null(0, r)) {
+                        double best_uct = 0;
+                        for (size_t i = 0; i < SmitsiMaxNode::MOVES; ++i) {
+                            if (i && used[player][i - 1] || !i && last_is_up)
+                                continue;
+                            double u = uct(cur[drone]->children[i], cur[drone]->visits);
+                            if (!best || u > best_uct) {
+                                best_uct = u;
+                                best = cur[drone]->children[i];
+                                moves[drone].back() = i;
+                            }
+                        }
                     }
+                    if (!best) {
+                        stoped[drone] = 1;
+                        --active;
+                        break;
+                    }
+                    cur[drone] = best;
+                    if (moves[drone].back())
+                        used[player][moves[drone].back() - 1] = 1;
                 }
             }
-            auto end = clock();
+            used = {};
+            for (int i = 0; i < COLORS * TYPES; ++i) {
+                auto [_, c, t] = flat_fishes[i];
+                if (have[c][t])
+                    used[0][i] = 1;
+                if (foe_have[c][t])
+                    used[1][i] = 1;
+            }
+            array<double, 2> score{};
+            auto found_of_type = intitial_found_of_type;
+            auto found_of_color = intitial_found_of_color;
+            auto drone_scans = initial_drone_scans;
+            auto coords = initial_coords;
 
-            cerr << "Time: " << static_cast<double>(end - start) * 1000.0 / CLOCKS_PER_SEC << " ms\n";
+            array<unsigned, 4> cur_move{};
+            array<double, 4> move_time{};
+            fill(move_time.begin(), move_time.end(), tick);
 
-            for (int i = 0; i < 4; ++i) {
-                cerr << "Drone " << drone_to_id[i] << " root score: " << roots[i]->score / roots[i]->visits << "\n";
+            auto calc_scores = [&](int i) {
+                if (move_time[i] >= MAX_TICK)
+                    return;
+                int m = moves[i][cur_move[i]];
+                int player = i & 1;
+                if (m == 0) {
+                    for (auto x : drone_scans[i]) {
+                        if (!used[player][x]) {
+                            used[player][x] = 1;
+                            auto &[_, c, t] = flat_fishes[x];
+                            ++found_of_color[player][c];
+                            ++found_of_type[player][t];
+                            int add = t + 1;
+                            if (!used[!player][x]) {
+                                add *= 2;
+                            }
+                            bool foe_have_c = (found_of_color[!player][c] == TYPES);
+                            bool foe_have_t = (found_of_type[!player][t] == COLORS);
+                            if (found_of_color[player][c] == TYPES) {
+                                add += TYPES * (foe_have_c ? 1 : 2);
+                            }
+                            if (found_of_type[player][t] == COLORS) {
+                                add += COLORS * (foe_have_t ? 1 : 2);
+                            }
+                            score[player] += add;// * exp((tick - move_time[i]) * 0.007);
+                        }
+                    }
+                    drone_scans[i].clear();
+                    return;
+                }
+                --m;
+                drone_scans[i].emplace_back(m);
+            };
+
+            auto calc_time = [&](int i) {
+                if (cur_move[i] == moves[i].size()) {
+                    move_time[i] = MAX_TICK;
+                    return;
+                }
+                int m = moves[i][cur_move[i]];
+                if (m == 0) {
+                    move_time[i] += (coords[i].y - SAVE_DEPTH) / DRONE_SPEED;
+                    coords[i].y = SAVE_DEPTH;
+                    return;
+                }
+                --m;
+                move_time[i] += (coords[i] - flat_pos[m]).len() / DRONE_SPEED;
+                coords[i] = flat_pos[m];
+            };
+
+            for (int i = 0; i < 4; ++i)
+                calc_time(i);
+
+            while (1) {
+                auto mn = min_element(move_time.begin(), move_time.end()) - move_time.begin();
+                if (move_time[mn] >= MAX_TICK)
+                    break;
+                calc_scores(mn);
+                ++cur_move[mn];
+                calc_time(mn);
             }
 
-            for (int i = 0; i < 4; i += 2) {
-                auto &cur_drone = my_drones[i / 2];
-                double best_score = -1;
-                int best_move = 0;
-                int best_visits = 0;
-                for (size_t m = 0; m < SmitsiMaxNode::MOVES; ++m) {
-                    auto ch = roots[i]->children[m];
-                    if (ch && ch->visits && ch->score / ch->visits > best_score) {
-                        best_score = ch->score / ch->visits;
-                        best_move = m;
-                        best_visits = ch->visits;
-                    }
+            // array<double, 2> normalized_scores;
+            // for (int i = 0; i < 2; ++i) {
+            //     if (score[i] > score[!i])
+            //         normalized_scores[i] = 1;
+            //     else
+            //         normalized_scores[i] = static_cast<double>(score[i]) / (score[0] + score[1]);
+            // }
+
+            score[0] += my_score;
+            score[1] += foe_score;
+
+            for (int i = 0; i < 2; ++i)
+                avg_score[i] += score[i];
+
+            for (int drone = 0; drone < 4; ++drone) {
+                int player = drone & 1;
+                while (cur[drone]) {
+                    // cerr << drone << ": " << cur[drone].pos << "\n";
+                    cur[drone]->visits++;
+                    cur[drone]->score += score[player] > score[!player];
+                    cur[drone] = cur[drone]->parent;
                 }
-                if (best_move == 0) {
-                    cerr << "Best move for drone " << cur_drone.id << ": go up, score: " << best_score << " (" << best_visits << ")\n";
-                    auto target = cur_drone.pos;
-                    target.y = SAVE_DEPTH - 1;
-                    cur_drone.cmd = CmdMove{{
-                        target,
-                        0,
-                    }};
-                } else {
-                    --best_move;
-                    auto [id, c, t] = flat_fishes[best_move];
-                    cerr << "Best move for drone " << cur_drone.id << ": go to fish " << id << "(c: " << c << ", t: " << t << ") at (" << flat_pos[i];
-                    cerr << ") score: " << best_score << " (" << best_visits << ")\n";
-                    cur_drone.cmd = CmdMove{{
-                        flat_pos[best_move],
-                        fish_zone[id].contains(cur_drone.pos) && cur_drone.battery >= BATTAREY_FOR_LIGHT,
-                    }};
+            }
+        }
+        auto end = clock();
+
+        cerr << "avg_score: " << avg_score[0] / 2000 << " " << avg_score[1] / 2000 << "\n";
+
+        cerr << "Time: " << static_cast<double>(end - start) * 1000.0 / CLOCKS_PER_SEC << " ms\n";
+
+        for (int i = 0; i < 4; ++i) {
+            cerr << "Drone " << drone_to_id[i] << " root score: " << roots[i]->score / roots[i]->visits << "\n";
+        }
+
+        for (int i = 0; i < 4; i += 2) {
+            auto &cur_drone = my_drones[i / 2];
+            double best_score = -1;
+            int best_move = 0;
+            int best_visits = 0;
+            for (size_t m = 0; m < SmitsiMaxNode::MOVES; ++m) {
+                if (m && initial_invalid_fish[0][m - 1])
+                    continue;
+                auto ch = roots[i]->children[m];
+                if (ch && ch->visits && ch->score / ch->visits > best_score) {
+                    best_score = ch->score / ch->visits;
+                    best_move = m;
+                    best_visits = ch->visits;
                 }
+            }
+            if (best_move == 0) {
+                cerr << "Best move for drone " << cur_drone.id << ": go up, score: " << best_score << " (" << best_visits << ")\n";
+                auto target = cur_drone.pos;
+                target.y = SAVE_DEPTH - 1;
+                cur_drone.cmd = CmdMove{{
+                    target,
+                    0,
+                }};
+            } else {
+                --best_move;
+                auto [id, c, t] = flat_fishes[best_move];
+                cerr << "Best move for drone " << cur_drone.id << ": go to fish " << id << "(c: " << c << ", t: " << t << ") at (" << flat_pos[best_move];
+                cerr << ") score: " << best_score << " (" << best_visits << ")\n";
+                cur_drone.cmd = CmdMove{{
+                    flat_pos[best_move],
+                    fish_zone[id].contains(cur_drone.pos) && cur_drone.battery >= BATTAREY_FOR_LIGHT || cur_drone.battery == MAX_BATTAREY,
+                }};
             }
         }
 
@@ -1155,7 +1181,7 @@ int main() {
 
         // Handle monsters
         for (auto &cur_drone : my_drones) {
-            constexpr auto DANGER_RADIUS = MONSTER_RADIUS + MONSTER_SPEED;
+            constexpr auto DANGER_RADIUS = MONSTER_RADIUS;
             if (auto cmd = get_if<CmdMove>(&cur_drone.cmd)) {
                 auto &[target, light] = *static_cast<CmdMove::Base*>(cmd);
                 SmallVec<MovingFish, 10> monsters;
@@ -1167,60 +1193,78 @@ int main() {
                 sort(monsters.begin(), monsters.end(), [&](auto &a, auto &b) {
                     return (a.pos - cur_drone.pos).lenSq() > (b.pos - cur_drone.pos).lenSq();
                 });
+                if (cur_drone.id < 2) {
+                    for (auto &m : monsters) {
+                        cerr << "Monster " << m.id << " at " << m.pos << " time = " << m.time << " checked at " << fish_check_time[m.id] << "\n";
+                    }
+                }
                 for (auto &m : monsters) {
-                    cerr << "Drone " << cur_drone.id << " monster " << m.id << " dist^2 = " << (m.pos - cur_drone.pos).lenSq() << "\n";
-                    Vec2d s = cur_drone.pos - m.pos;
-                    s /= s.len();
-                    s *= MONSTER_SPEED;
+                    Vec2d s = m.vel;
+                    if ((m.pos - cur_drone.pos).len() <= BASE_SCAN_RADIUS) {
+                        s = (cur_drone.pos - m.pos).normalize() * MONSTER_SPEED;
+                    }
                     Vec2i new_m_pos(m.pos + s);
-                    if ((new_m_pos - cur_drone.pos).len() < LIGHT_SCAN_RADIUS) {
+                    if ((new_m_pos - cur_drone.pos).len() < LIGHT_SCAN_RADIUS && (new_m_pos - cur_drone.pos).len() > BASE_SCAN_RADIUS) {
                         light = 0;
                     }
-                    if ((cur_drone.pos - new_m_pos).len() <= DANGER_RADIUS) {
-                        Vec2d d = cur_drone.pos - new_m_pos;
-                        d /= d.len();
-                        cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
-                        target = Vec2i(cur_drone.pos + d * DRONE_SPEED);
-                        if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
-                            d.x += copysign(DRONE_SPEED, d.x);
-                            d.y += copysign(DRONE_SPEED, d.y);
-                            target = Vec2i(cur_drone.pos + d * DRONE_SPEED);
-                        }
-                        cerr << "(" << target << ") monster: " << m.id << "\n";
-                        continue;
-                    }
+                    // if ((cur_drone.pos - new_m_pos).len() <= DANGER_RADIUS) {
+                    //     Vec2d d = cur_drone.pos - new_m_pos;
+                    //     d /= d.len();
+                    //     cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
+                    //     target = Vec2i(cur_drone.pos + d * DRONE_SPEED);
+                    //     if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
+                    //         d.x += copysign(DRONE_SPEED, d.x);
+                    //         d.y += copysign(DRONE_SPEED, d.y);
+                    //         target = Vec2i(cur_drone.pos + d * DRONE_SPEED);
+                    //     }
+                    //     cerr << "(" << target << ") monster: " << m.id << "\n";
+                    //     continue;
+                    // }
                     if ((target - new_m_pos).len() <= DANGER_RADIUS) {
                         Vec2d d = target - new_m_pos;
                         d /= d.len();
                         cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
                         target = Vec2i(new_m_pos + d * DANGER_RADIUS);
-                        if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
-                            d = target - cur_drone.pos;
-                            d.x += copysign(DRONE_SPEED, d.x);
-                            d.y += copysign(DRONE_SPEED, d.y);
-                            target = Vec2i(cur_drone.pos + d);
-                        }
+                        // if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
+                        //     d = target - cur_drone.pos;
+                        //     d.x += copysign(DRONE_SPEED, d.x);
+                        //     d.y += copysign(DRONE_SPEED, d.y);
+                        //     target = Vec2i(cur_drone.pos + d);
+                        // }
                         cerr << "(" << target << ") monster: " << m.id << "\n";
-                        continue;
+                        // continue;
                     }
                     auto target_dir = target - cur_drone.pos;
                     auto monster_dir = new_m_pos - cur_drone.pos;
-                    if (monster_dir * target_dir > target_dir * target_dir)
+                    if (monster_dir * target_dir >= target_dir * target_dir || monster_dir * target_dir <= 0)
                         continue;
                     auto dist = abs(cross(monster_dir, target_dir) / target_dir.len());
                     if (dist > DANGER_RADIUS)
                         continue;
+                    cerr << "monster_dir = " << monster_dir << "\n";
                     auto shift = target_dir.left();
                     if (shift * monster_dir > 0)
                         shift = -shift;
                     cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
-                    target = Vec2i(new_m_pos + shift / shift.len() * DANGER_RADIUS);
+                    target = Vec2i(new_m_pos + shift.normalize() * BASE_SCAN_RADIUS);
                     if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
-                        shift = -shift;
-                        target = Vec2i(new_m_pos + shift / shift.len() * DANGER_RADIUS);
+                        Vec2d d = target - cur_drone.pos;
+                        d.x += copysign(DRONE_SPEED, d.x);
+                        d.y += copysign(DRONE_SPEED, d.y);
+                        target = Vec2i(cur_drone.pos + d);
                     }
                     cerr << "(" << target << ") monster: " << m.id << "\n";
                 }
+            }
+        }
+
+        // Shrink commands
+
+        for (auto &d : my_drones) {
+            if (auto cmd = get_if<CmdMove>(&d.cmd)) {
+                auto &[target, light] = *static_cast<CmdMove::Base*>(cmd);
+                target.x = clamp(target.x, 0, SIZE - 1);
+                target.y = clamp(target.y, 0, SIZE - 1);
             }
         }
 
@@ -1228,6 +1272,7 @@ int main() {
 
         old_drones_data = decltype(old_drones_data)(drones.begin(), drones.end());
 
+        // Apply commands
         for (auto &d : my_drones) {
             visit([](auto cmd) {
                 for (auto x : decltype(cmd)::mnemonic) {
