@@ -379,14 +379,16 @@ struct SmallPtr {
 // Constants
 
 constexpr int COLORS = 4, TYPES = 3, SIZE = 10000, BASE_SCAN_RADIUS = 800, DRONE_SPEED = 600, LIGHT_SCAN_RADIUS = 2000, BATTAREY_FOR_LIGHT = 5;
+constexpr int DRONE_EMERGENCY_SPEED = 300;
 constexpr int NOISE_RADIUS = 1400, MAX_BATTAREY = 30, FISH_MAX_SPEED = 400;
 constexpr int MONSTER_RADIUS = 500, MONSTER_SPEED = 540, MONSTER_EXTRA_RADIUS = 300;
 constexpr int y_min[TYPES] = {2500, 5000, 7500};
 constexpr int y_max[TYPES] = {5000, 7500, 10000};
+constexpr int MAX_SCORE = 96;
 constexpr int MAX_TICK = 200, SAVE_DEPTH = 500;
 
 struct SmitsiMaxNode {
-    static constexpr size_t MAX_NODES = 10'000'000;
+    static constexpr size_t MAX_NODES = 1'000'000;
     static constexpr size_t MOVES = COLORS * TYPES + 1;
     static SmitsiMaxNode nodes[MAX_NODES];
     static uint32_t allocated;
@@ -400,16 +402,14 @@ struct SmitsiMaxNode {
     }
 
     NodePtr parent = nullptr;
+    array<int, MOVES> child_time{};
     array<NodePtr, MOVES> children{};
     double score = 0;
     int visits = 0;
 
-    NodePtr get_child(int i) {
-        if (!children[i]) {
-            children[i] = newNode();
-            children[i]->parent = this;
-            // cerr << "Create child of " << NodePtr(this).pos << ": " << children[i].pos << "\n";
-        }
+    NodePtr create_child(int i) {
+        children[i] = newNode();
+        children[i]->parent = this;
         return children[i];
     }
 
@@ -764,7 +764,7 @@ int main() {
 
         array<array<int, TYPES>, 2> intitial_found_of_type{};
         array<array<int, COLORS>, 2> intitial_found_of_color{};
-        array<SmallVec<int, COLORS * TYPES>, 4> initial_drone_scans;
+        array<SmallVec<int, COLORS * TYPES>, 4> initial_drone_scans{};
 
         for (auto [d, f] : drone_scans) {
             int drone_index = find(drone_to_id.begin(), drone_to_id.end(), d) - drone_to_id.begin();
@@ -786,16 +786,6 @@ int main() {
             ++intitial_found_of_type[1][t];
         }
 
-        int depth = 0;
-        for (auto &[d, f, _] : radare) {
-            if (d == my_drones[0].id && fishes[f].type >= 0 && !semi_have_id.count(f)) {
-                ++depth;
-            }
-        }
-        depth = max((depth + 1) / 2 * 2, 1);
-
-        cerr << "depth = " << depth << "\n";
-
         array<SmitsiMaxNode::NodePtr, 4> roots;
 
         SmitsiMaxNode::allocated = 0;
@@ -804,6 +794,7 @@ int main() {
         }
 
         array<array<bool, COLORS * TYPES>, 2> initial_invalid_fish{};
+
         for (int i = 0; i < COLORS * TYPES; ++i) {
             auto [_, c, t] = flat_fishes[i];
             if (semi_have[c][t] || invalid[i])
@@ -812,169 +803,215 @@ int main() {
                 initial_invalid_fish[1][i] = 1;
         }
 
+        array<int, 4> initial_move_time;
+
+        for (int i = 0; i < 4; ++i) {
+            auto &d = drones.at(drone_to_id[i]);
+            initial_move_time[i] = tick * DRONE_SPEED;
+            if (d.emergency) {
+                initial_coords[i].y = 0;
+                initial_move_time[i] += (d.pos.y + DRONE_EMERGENCY_SPEED - 1) / DRONE_EMERGENCY_SPEED * DRONE_SPEED;
+            }
+        }
+
         auto start = clock();
-        array<double, 2> avg_score{};
-        for (int i = 0; i < 2000; ++i) {
-            auto cur = roots;
-            auto used = initial_invalid_fish;
+        constexpr long TIME_LIMIT = CLOCKS_PER_SEC * 47 / 1000;
+        array<double, 2> sum_score{};
+        array<int, 2> min_score = {200, 200}, max_score = {0, 0};
+        int iterations = 0;
+        while (clock() - start < TIME_LIMIT) {
+            for (int i = 0; i < 100; ++i) {
+                auto cur = roots;
+                auto used = initial_invalid_fish;
 
-            array<SmallVec<int, COLORS * TYPES>, 4> moves; 
-            array<bool, 4> stoped{};
-            int active = 4;
-            for (int t = 0; t < depth && active; ++t) {
-                for (int drone = 0; drone < 4; ++drone) {
-                    if (stoped[drone])
+                array<int, 4> last_move;
+                for (int i = 0; i < 4; ++i) {
+                    if (initial_drone_scans[i].empty()) {
+                        last_move[i] = 0;
+                    } else {
+                        last_move[i] = -1;
+                    }
+                }
+                array<array<bool, COLORS * TYPES>, 2> saved = {};
+                for (int i = 0; i < COLORS * TYPES; ++i) {
+                    auto [_, c, t] = flat_fishes[i];
+                    if (have[c][t])
+                        saved[0][i] = 1;
+                    if (foe_have[c][t])
+                        saved[1][i] = 1;
+                }
+                array<int, 2> score{};
+                auto found_of_type = intitial_found_of_type;
+                auto found_of_color = intitial_found_of_color;
+                auto drone_scans = initial_drone_scans;
+                auto coords = initial_coords;
+
+                auto move_time = initial_move_time;
+
+                while (1) {
+                    auto drone = min_element(move_time.begin(), move_time.end()) - move_time.begin();
+                    if (move_time[drone] >= MAX_TICK * DRONE_SPEED)
                         break;
-                    int player = drone & 1;
-                    bool last_is_up = moves[drone].size() && !moves[drone].back();
 
-                    moves[drone].emplace_back();
+                    int player = drone & 1;
+
+                    if (last_move[drone] == 0) {
+                        for (auto x : drone_scans[drone]) {
+                            if (!saved[player][x]) {
+                                saved[player][x] = 1;
+                                auto &[_, c, t] = flat_fishes[x];
+                                ++found_of_color[player][c];
+                                ++found_of_type[player][t];
+                                int add = t + 1;
+                                if (!saved[!player][x]) {
+                                    add *= 2;
+                                }
+                                bool foe_have_c = (found_of_color[!player][c] == TYPES);
+                                bool foe_have_t = (found_of_type[!player][t] == COLORS);
+                                if (found_of_color[player][c] == TYPES) {
+                                    add += TYPES * (foe_have_c ? 1 : 2);
+                                }
+                                if (found_of_type[player][t] == COLORS) {
+                                    add += COLORS * (foe_have_t ? 1 : 2);
+                                }
+                                score[player] += add;// * exp((tick - move_time[i]) * 0.007);
+                                // if (iterations == 0 && i == 0 && player == 1) {
+                                //     cerr << c << " " << t << " +" << add << "\n";
+                                // }
+                            }
+                        }
+                        drone_scans[drone].clear();
+                    }
+
                     SmitsiMaxNode::NodePtr best = nullptr;
-                    unsigned r = rnd() % SmitsiMaxNode::MOVES;
-                    auto check_null = [&][[gnu::always_inline]](unsigned f, unsigned t)->bool {
-                        for (unsigned i = f; i < t; ++i) {
-                            if (i && used[player][i - 1] || !i && last_is_up)
+                    int best_move;
+
+                    if (cur[drone]->visits == 0) {
+                        for (unsigned i = (last_move[drone] == 0); i < SmitsiMaxNode::MOVES; ++i) {
+                            if (i && used[player][i - 1])
                                 continue;
-                            if (!cur[drone]->children[i]) {
-                                best = cur[drone]->get_child(i);
-                                moves[drone].back() = i;
+                            if (i == 0) {
+                                cur[drone]->child_time[i] = move_time[drone] + coords[drone].y - SAVE_DEPTH;
+                            } else {
+                                cur[drone]->child_time[i] = move_time[drone] + int((coords[drone] - flat_pos[i - 1]).len());
+                            }
+                        }
+                    }
+
+                    int max_possible_time = MAX_TICK * DRONE_SPEED;
+                    array<bool, COLORS * TYPES> my_fishes{};
+                    for (auto x : drone_scans[drone])
+                        my_fishes[x] = 1;
+
+                    int my_min_time = coords[drone].y - SAVE_DEPTH;
+
+                    #pragma GCC unroll 2
+                    for (int foe_drone = !player; foe_drone < 4; foe_drone += 2) {
+                        bool intersect = 0;
+                        for (auto x : drone_scans[foe_drone]) {
+                            if (my_fishes[x]) {
+                                intersect = 1;
                                 break;
                             }
                         }
-                        return best;
-                    };
-                    if (!check_null(r, SmitsiMaxNode::MOVES) && !check_null(0, r)) {
+                        if (intersect) {
+                            int foe_time = move_time[foe_drone];
+                            if (last_move[foe_drone] > 0) {
+                                foe_time += (coords[foe_drone].y - SAVE_DEPTH);
+                            }
+                            if (foe_time > my_min_time) {
+                                max_possible_time = min(max_possible_time, foe_time);
+                            }
+                        }
+                    }
+
+                    int best_fish = -1;
+                    int best_dist = SIZE * 2;
+                    int best_type = 0;
+                    for (unsigned i = 0; i < COLORS * TYPES; ++i) {
+                        if (used[player][i] || cur[drone]->child_time[i + 1] >= MAX_TICK * DRONE_SPEED || cur[drone]->children[i + 1])
+                            continue;
+                        int dist = (flat_pos[i] - coords[drone]).len();
+                        int type = flat_fishes[i].type;
+                        if (pair(type, -dist) > pair(best_type, -best_dist)) {
+                            best_dist = dist;
+                            best_type = type;
+                            best_fish = i;
+                        }
+                    }
+
+                    if (best_fish != -1) {
+                        best = cur[drone]->create_child(best_move = best_fish + 1);
+                    } else if (!cur[drone]->children[0] && last_move[drone] != 0) {
+                        best = cur[drone]->create_child(best_move = 0);
+                    }
+                    
+                    if (!best) {
                         double best_uct = 0;
-                        for (size_t i = 0; i < SmitsiMaxNode::MOVES; ++i) {
-                            if (i && used[player][i - 1] || !i && last_is_up)
+                        for (size_t i = (last_move[drone] == 0); i < SmitsiMaxNode::MOVES; ++i) {
+                            if (i && used[player][i - 1])
                                 continue;
                             double u = uct(cur[drone]->children[i], cur[drone]->visits);
                             if (!best || u > best_uct) {
                                 best_uct = u;
-                                best = cur[drone]->children[i];
-                                moves[drone].back() = i;
+                                best = cur[drone]->children[best_move = i];
                             }
                         }
                     }
+
                     if (!best) {
-                        stoped[drone] = 1;
-                        --active;
-                        break;
+                        move_time[drone] = MAX_TICK * DRONE_SPEED;
+                        continue;
                     }
+
                     cur[drone] = best;
-                    if (moves[drone].back())
-                        used[player][moves[drone].back() - 1] = 1;
-                }
-            }
-            used = {};
-            for (int i = 0; i < COLORS * TYPES; ++i) {
-                auto [_, c, t] = flat_fishes[i];
-                if (have[c][t])
-                    used[0][i] = 1;
-                if (foe_have[c][t])
-                    used[1][i] = 1;
-            }
-            array<double, 2> score{};
-            auto found_of_type = intitial_found_of_type;
-            auto found_of_color = intitial_found_of_color;
-            auto drone_scans = initial_drone_scans;
-            auto coords = initial_coords;
-
-            array<unsigned, 4> cur_move{};
-            array<double, 4> move_time{};
-            fill(move_time.begin(), move_time.end(), tick);
-
-            auto calc_scores = [&](int i) {
-                if (move_time[i] >= MAX_TICK)
-                    return;
-                int m = moves[i][cur_move[i]];
-                int player = i & 1;
-                if (m == 0) {
-                    for (auto x : drone_scans[i]) {
-                        if (!used[player][x]) {
-                            used[player][x] = 1;
-                            auto &[_, c, t] = flat_fishes[x];
-                            ++found_of_color[player][c];
-                            ++found_of_type[player][t];
-                            int add = t + 1;
-                            if (!used[!player][x]) {
-                                add *= 2;
-                            }
-                            bool foe_have_c = (found_of_color[!player][c] == TYPES);
-                            bool foe_have_t = (found_of_type[!player][t] == COLORS);
-                            if (found_of_color[player][c] == TYPES) {
-                                add += TYPES * (foe_have_c ? 1 : 2);
-                            }
-                            if (found_of_type[player][t] == COLORS) {
-                                add += COLORS * (foe_have_t ? 1 : 2);
-                            }
-                            score[player] += add;// * exp((tick - move_time[i]) * 0.007);
-                        }
+                    last_move[drone] = best_move;
+                    if (best_move == 0) {
+                        move_time[drone] += max(DRONE_SPEED, coords[drone].y - SAVE_DEPTH);
+                        coords[drone].y = SAVE_DEPTH;
+                    } else {
+                        move_time[drone] += max<int>((flat_pos[best_move - 1] - coords[drone]).len() - LIGHT_SCAN_RADIUS, 1);
+                        coords[drone] = flat_pos[best_move - 1];
+                        drone_scans[drone].emplace_back(best_move - 1);
+                        used[player][best_move - 1] = 1;
                     }
-                    drone_scans[i].clear();
-                    return;
                 }
-                --m;
-                drone_scans[i].emplace_back(m);
-            };
 
-            auto calc_time = [&](int i) {
-                if (cur_move[i] == moves[i].size()) {
-                    move_time[i] = MAX_TICK;
-                    return;
+                array cur_score = {my_score, foe_score};
+                array<double, 2> normalized_scores;
+                for (int i = 0; i < 2; ++i) {
+                    int win_score = (MAX_SCORE + MAX_SCORE / 2) / 2 + 1 - cur_score[i];
+                    if (win_score < 0)
+                        normalized_scores[i] = 1.0;
+                    else
+                        normalized_scores[i] = min(1.0, static_cast<double>(score[i]) / win_score);
                 }
-                int m = moves[i][cur_move[i]];
-                if (m == 0) {
-                    move_time[i] += (coords[i].y - SAVE_DEPTH) / DRONE_SPEED;
-                    coords[i].y = SAVE_DEPTH;
-                    return;
+
+                for (int i = 0; i < 2; ++i) {
+                    sum_score[i] += score[i];
+                    min_score[i] = min(min_score[i], score[i]);
+                    max_score[i] = max(max_score[i], score[i]);
                 }
-                --m;
-                move_time[i] += (coords[i] - flat_pos[m]).len() / DRONE_SPEED;
-                coords[i] = flat_pos[m];
-            };
 
-            for (int i = 0; i < 4; ++i)
-                calc_time(i);
-
-            while (1) {
-                auto mn = min_element(move_time.begin(), move_time.end()) - move_time.begin();
-                if (move_time[mn] >= MAX_TICK)
-                    break;
-                calc_scores(mn);
-                ++cur_move[mn];
-                calc_time(mn);
-            }
-
-            // array<double, 2> normalized_scores;
-            // for (int i = 0; i < 2; ++i) {
-            //     if (score[i] > score[!i])
-            //         normalized_scores[i] = 1;
-            //     else
-            //         normalized_scores[i] = static_cast<double>(score[i]) / (score[0] + score[1]);
-            // }
-
-            score[0] += my_score;
-            score[1] += foe_score;
-
-            for (int i = 0; i < 2; ++i)
-                avg_score[i] += score[i];
-
-            for (int drone = 0; drone < 4; ++drone) {
-                int player = drone & 1;
-                while (cur[drone]) {
-                    // cerr << drone << ": " << cur[drone].pos << "\n";
-                    cur[drone]->visits++;
-                    cur[drone]->score += score[player] > score[!player];
-                    cur[drone] = cur[drone]->parent;
+                for (int drone = 0; drone < 4; ++drone) {
+                    int player = drone & 1;
+                    while (cur[drone]) {
+                        // cerr << drone << ": " << cur[drone].pos << "\n";
+                        cur[drone]->visits++;
+                        cur[drone]->score += normalized_scores[player];
+                        cur[drone] = cur[drone]->parent;
+                    }
                 }
             }
+            iterations += 100;
         }
         auto end = clock();
 
-        cerr << "avg_score: " << avg_score[0] / 2000 << " " << avg_score[1] / 2000 << "\n";
-
-        cerr << "Time: " << static_cast<double>(end - start) * 1000.0 / CLOCKS_PER_SEC << " ms\n";
+        cerr << "avg_score: " << sum_score[0] / iterations << " " << sum_score[1] / iterations << "\n";
+        cerr << "min_score: " << min_score[0] << " " << min_score[1] << "\n";
+        cerr << "max_score: " << max_score[0] << " " << max_score[1] << "\n";
+        cerr << "Iterations: " << iterations << " / " << static_cast<double>(end - start) * 1000.0 / CLOCKS_PER_SEC << " ms\n";
+        cerr << "Nodes allocated: " << SmitsiMaxNode::allocated << "\n";
 
         for (int i = 0; i < 4; ++i) {
             cerr << "Drone " << drone_to_id[i] << " root score: " << roots[i]->score / roots[i]->visits << "\n";
@@ -1010,7 +1047,7 @@ int main() {
                 cerr << ") score: " << best_score << " (" << best_visits << ")\n";
                 cur_drone.cmd = CmdMove{{
                     flat_pos[best_move],
-                    fish_zone[id].contains(cur_drone.pos) && cur_drone.battery >= BATTAREY_FOR_LIGHT || cur_drone.battery == MAX_BATTAREY,
+                    fish_zone[id].contains(cur_drone.pos) && cur_drone.battery >= BATTAREY_FOR_LIGHT || cur_drone.battery == MAX_BATTAREY && cur_drone.pos.y >= y_min[0],
                 }};
             }
         }
