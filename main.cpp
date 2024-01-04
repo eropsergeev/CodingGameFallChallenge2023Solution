@@ -1,5 +1,4 @@
-#pragma GCC optimize("Ofast")
-// #pragma GCC target("avx2,bmi2,popcnt")
+// #define DETERMINISTIC_MODE
 
 #include <bits/stdc++.h>
 
@@ -527,7 +526,33 @@ struct MovingFish {
 
 }
 
-int main() {
+// struct LoggingBuffer : public streambuf {
+//     ofstream log;
+//     bool active = 0;
+//     LoggingBuffer(const char *name) {
+//         if (name) {
+//             active = 1;
+//             log.open(name);
+//         }
+//     }
+//     int last_char = traits_type::eof();
+//     int underflow() override {
+//         if (last_char == traits_type::eof()) {
+//             last_char = cin.get();
+//             log.put(last_char);
+//             log.flush();
+//         }
+//         return last_char;
+//     }
+//     int uflow() override {
+//         int ret = underflow();
+//         last_char = traits_type::eof();
+//         return ret;
+//     }
+// };
+
+int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
+    // istream cin(new LoggingBuffer(argv[1]));
     mt19937 rnd(42);
     ios::sync_with_stdio(0);
     cin.tie(nullptr);
@@ -638,6 +663,27 @@ int main() {
         }
 
         // Logic
+
+        for (auto &[id, f] : fish_cache) {
+            if (f.time == tick)
+                continue;
+            int y1 = y_min[0];
+            int y2 = SIZE;
+            constexpr int x1 = 0;
+            constexpr int x2 = SIZE;
+            int t = fishes[f.id].type;
+            if (t >= 0) {
+                y1 = y_min[t];
+                y2 = y_max[t];
+            }
+            if (f.pos.x + f.vel.x < x1 || f.pos.x + f.vel.x >= x2) {
+                f.vel.x = -f.vel.x;
+            }
+            if (f.pos.y + f.vel.y < y1 || f.pos.y + f.vel.y >= y2) {
+                f.vel.y = -f.vel.y;
+            }
+            f.pos += f.vel;
+        }
 
         for (auto x : my_scans) {
             auto [_, c, t] = fishes[x];
@@ -815,11 +861,17 @@ int main() {
         }
 
         auto start = clock();
+        #ifndef DETERMINISTIC_MODE
         constexpr long TIME_LIMIT = CLOCKS_PER_SEC * 47 / 1000;
+        #endif
         array<double, 2> sum_score{};
         array<int, 2> min_score = {200, 200}, max_score = {0, 0};
         int iterations = 0;
+        #ifdef DETERMINISTIC_MODE
+        while (iterations < 2000) {
+        #else
         while (clock() - start < TIME_LIMIT) {
+        #endif
             for (int i = 0; i < 100; ++i) {
                 auto cur = roots;
                 auto used = initial_invalid_fish;
@@ -884,7 +936,7 @@ int main() {
                     }
 
                     SmitsiMaxNode::NodePtr best = nullptr;
-                    int best_move;
+                    int best_move = 0;
 
                     if (cur[drone]->visits == 0) {
                         for (unsigned i = (last_move[drone] == 0); i < SmitsiMaxNode::MOVES; ++i) {
@@ -988,9 +1040,9 @@ int main() {
                 }
 
                 for (int i = 0; i < 2; ++i) {
-                    sum_score[i] += score[i];
-                    min_score[i] = min(min_score[i], score[i]);
-                    max_score[i] = max(max_score[i], score[i]);
+                    sum_score[i] += score[i] + cur_score[i];
+                    min_score[i] = min(min_score[i], score[i] + cur_score[i]);
+                    max_score[i] = max(max_score[i], score[i] + cur_score[i]);
                 }
 
                 for (int drone = 0; drone < 4; ++drone) {
@@ -1045,9 +1097,10 @@ int main() {
                 auto [id, c, t] = flat_fishes[best_move];
                 cerr << "Best move for drone " << cur_drone.id << ": go to fish " << id << "(c: " << c << ", t: " << t << ") at (" << flat_pos[best_move];
                 cerr << ") score: " << best_score << " (" << best_visits << ")\n";
+                double dist = (fish_zone[id].center() - cur_drone.pos).len();
                 cur_drone.cmd = CmdMove{{
                     flat_pos[best_move],
-                    fish_zone[id].contains(cur_drone.pos) && cur_drone.battery >= BATTAREY_FOR_LIGHT || cur_drone.battery == MAX_BATTAREY && cur_drone.pos.y >= y_min[0],
+                    dist > BASE_SCAN_RADIUS && dist < LIGHT_SCAN_RADIUS && cur_drone.battery >= BATTAREY_FOR_LIGHT || cur_drone.battery == MAX_BATTAREY && cur_drone.pos.y >= y_min[0],
                 }};
             }
         }
@@ -1241,8 +1294,29 @@ int main() {
                         s = (cur_drone.pos - m.pos).normalize() * MONSTER_SPEED;
                     }
                     Vec2i new_m_pos(m.pos + s);
+                    if ((new_m_pos.x - cur_drone.pos.x) * (m.pos.x - cur_drone.pos.x) < 0) {
+                        new_m_pos.x = cur_drone.pos.x;
+                    }
+                    if ((new_m_pos.y - cur_drone.pos.y) * (m.pos.y - cur_drone.pos.y) < 0) {
+                        new_m_pos.y = cur_drone.pos.y;
+                    }
+                    cerr << "new pos = " << new_m_pos << " dist: " << (new_m_pos - cur_drone.pos).len() << "\n";
                     if ((new_m_pos - cur_drone.pos).len() < LIGHT_SCAN_RADIUS && (new_m_pos - cur_drone.pos).len() > BASE_SCAN_RADIUS) {
                         light = 0;
+                    }
+                    if ((cur_drone.pos - new_m_pos).len() <= MONSTER_RADIUS) {
+                        if (new_m_pos == cur_drone.pos) {
+                            new_m_pos = m.pos;
+                        }
+                        target = cur_drone.pos + Vec2i((cur_drone.pos - new_m_pos).normalize() * DRONE_SPEED);
+                        if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
+                            Vec2d d = target - cur_drone.pos;
+                            d.x += copysign(DRONE_SPEED, d.x);
+                            d.y += copysign(DRONE_SPEED, d.y);
+                            target = Vec2i(cur_drone.pos + d);
+                        }
+                        cerr << "Monster too close, go to " << target << "\n";
+                        break;
                     }
                     // if ((cur_drone.pos - new_m_pos).len() <= DANGER_RADIUS) {
                     //     Vec2d d = cur_drone.pos - new_m_pos;
@@ -1268,29 +1342,34 @@ int main() {
                         //     d.y += copysign(DRONE_SPEED, d.y);
                         //     target = Vec2i(cur_drone.pos + d);
                         // }
-                        cerr << "(" << target << ") monster: " << m.id << "\n";
+                        cerr << "(" << target << ") monster: " << m.id << " case 1\n";
                         // continue;
                     }
                     auto target_dir = target - cur_drone.pos;
                     auto monster_dir = new_m_pos - cur_drone.pos;
+                    cerr << "monster_dir = " << monster_dir << "\n";
+                    cerr << "target_dir = " << target_dir << "\n";
                     if (monster_dir * target_dir >= target_dir * target_dir || monster_dir * target_dir <= 0)
                         continue;
                     auto dist = abs(cross(monster_dir, target_dir) / target_dir.len());
                     if (dist > DANGER_RADIUS)
                         continue;
-                    cerr << "monster_dir = " << monster_dir << "\n";
-                    auto shift = target_dir.left();
-                    if (shift * monster_dir > 0)
-                        shift = -shift;
+                    double sn = (MONSTER_RADIUS + 10) / (cur_drone.pos - new_m_pos).len();
+                    double cs = sqrt(1 - sn * sn);
+
+                    Vec2d rot(monster_dir.x * cs - monster_dir.y * sn, monster_dir.x * sn + monster_dir.y * cs);
+                    if (signbit(cross(rot, monster_dir)) != signbit(cross(target_dir, monster_dir))) {
+                        rot = Vec2d(monster_dir.x * cs + monster_dir.y * sn, monster_dir.y * cs - monster_dir.x * sn);
+                    }
                     cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
-                    target = Vec2i(new_m_pos + shift.normalize() * BASE_SCAN_RADIUS);
+                    target = cur_drone.pos + Vec2i(rot);
                     if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
                         Vec2d d = target - cur_drone.pos;
                         d.x += copysign(DRONE_SPEED, d.x);
                         d.y += copysign(DRONE_SPEED, d.y);
                         target = Vec2i(cur_drone.pos + d);
                     }
-                    cerr << "(" << target << ") monster: " << m.id << "\n";
+                    cerr << "(" << target << ") monster: " << m.id << " case 2\n";
                 }
             }
         }
@@ -1300,6 +1379,9 @@ int main() {
         for (auto &d : my_drones) {
             if (auto cmd = get_if<CmdMove>(&d.cmd)) {
                 auto &[target, light] = *static_cast<CmdMove::Base*>(cmd);
+                auto s = (target - d.pos);
+                if (s.len() > DRONE_SPEED)
+                    target = Vec2i(d.pos + s.normalize() * DRONE_SPEED);
                 target.x = clamp(target.x, 0, SIZE - 1);
                 target.y = clamp(target.y, 0, SIZE - 1);
             }
