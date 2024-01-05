@@ -913,7 +913,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
 
         auto start = clock();
         #ifndef DETERMINISTIC_MODE
-        constexpr long TIME_LIMIT = CLOCKS_PER_SEC * 47 / 1000;
+        constexpr long TIME_LIMIT = CLOCKS_PER_SEC * 43 / 1000;
         #endif
         array<double, 2> sum_score{};
         array<int, 2> min_score = {200, 200}, max_score = {0, 0};
@@ -1370,7 +1370,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
 
         // Handle monsters
         for (auto &cur_drone : my_drones) {
-            constexpr auto DANGER_RADIUS = MONSTER_RADIUS;
+            // constexpr auto DANGER_RADIUS = MONSTER_RADIUS;
             if (auto cmd = get_if<CmdMove>(&cur_drone.cmd)) {
                 auto &[target, light] = *static_cast<CmdMove::Base*>(cmd);
                 SmallVec<MovingFish, 10> monsters;
@@ -1379,98 +1379,145 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
                         monsters.emplace_back(m);
                     }
                 }
-                sort(monsters.begin(), monsters.end(), [&](auto &a, auto &b) {
-                    return (a.pos - cur_drone.pos).lenSq() > (b.pos - cur_drone.pos).lenSq();
-                });
+                // sort(monsters.begin(), monsters.end(), [&](auto &a, auto &b) {
+                //     return (a.pos - cur_drone.pos).lenSq() > (b.pos - cur_drone.pos).lenSq();
+                // });
                 if (cur_drone.id < 2) {
                     for (auto &m : monsters) {
                         cerr << "Monster " << m.id << " at " << m.pos << " time = " << m.time << " checked at " << fish_check_time[m.id] << "\n";
                     }
                 }
-                for (auto &m : monsters) {
-                    Vec2d s = m.vel;
-                    if ((m.pos - cur_drone.pos).len() <= BASE_SCAN_RADIUS) {
-                        s = (cur_drone.pos - m.pos).normalize() * MONSTER_SPEED;
-                    }
-                    Vec2i new_m_pos(m.pos + s);
-                    if ((new_m_pos.x - cur_drone.pos.x) * (m.pos.x - cur_drone.pos.x) < 0) {
-                        new_m_pos.x = cur_drone.pos.x;
-                    }
-                    if ((new_m_pos.y - cur_drone.pos.y) * (m.pos.y - cur_drone.pos.y) < 0) {
-                        new_m_pos.y = cur_drone.pos.y;
-                    }
-                    cerr << "new pos = " << new_m_pos << " dist: " << (new_m_pos - cur_drone.pos).len() << "\n";
-                    // if ((new_m_pos - cur_drone.pos).len() < LIGHT_SCAN_RADIUS && (new_m_pos - cur_drone.pos).len() > BASE_SCAN_RADIUS) {
-                    //     light = 0;
-                    // }
-                    if ((cur_drone.pos - new_m_pos).len() <= MONSTER_RADIUS) {
-                        if (new_m_pos == cur_drone.pos) {
-                            new_m_pos = m.pos;
-                        }
-                        target = cur_drone.pos + Vec2i((cur_drone.pos - new_m_pos).normalize() * DRONE_SPEED);
-                        if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
-                            Vec2d d = target - cur_drone.pos;
-                            d.x += copysign(DRONE_SPEED, d.x);
-                            d.y += copysign(DRONE_SPEED, d.y);
-                            target = Vec2i(cur_drone.pos + d);
-                        }
-                        cerr << "Monster too close, go to " << target << "\n";
-                        break;
-                    }
-                    // if ((cur_drone.pos - new_m_pos).len() <= DANGER_RADIUS) {
-                    //     Vec2d d = cur_drone.pos - new_m_pos;
-                    //     d /= d.len();
-                    //     cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
-                    //     target = Vec2i(cur_drone.pos + d * DRONE_SPEED);
-                    //     if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
-                    //         d.x += copysign(DRONE_SPEED, d.x);
-                    //         d.y += copysign(DRONE_SPEED, d.y);
-                    //         target = Vec2i(cur_drone.pos + d * DRONE_SPEED);
-                    //     }
-                    //     cerr << "(" << target << ") monster: " << m.id << "\n";
-                    //     continue;
-                    // }
-                    if ((target - new_m_pos).len() <= DANGER_RADIUS) {
-                        Vec2d d = target - new_m_pos;
-                        d /= d.len();
-                        cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
-                        target = Vec2i(new_m_pos + d * DANGER_RADIUS);
-                        // if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
-                        //     d = target - cur_drone.pos;
-                        //     d.x += copysign(DRONE_SPEED, d.x);
-                        //     d.y += copysign(DRONE_SPEED, d.y);
-                        //     target = Vec2i(cur_drone.pos + d);
-                        // }
-                        cerr << "(" << target << ") monster: " << m.id << " case 1\n";
-                        // continue;
-                    }
-                    auto target_dir = target - cur_drone.pos;
-                    auto monster_dir = new_m_pos - cur_drone.pos;
-                    cerr << "monster_dir = " << monster_dir << "\n";
-                    cerr << "target_dir = " << target_dir << "\n";
-                    if (monster_dir * target_dir >= target_dir * target_dir || monster_dir * target_dir <= 0)
-                        continue;
-                    auto dist = abs(cross(monster_dir, target_dir) / target_dir.len());
-                    if (dist > DANGER_RADIUS)
-                        continue;
-                    double free_zone_radius = (cur_drone.pos - new_m_pos).len() < BASE_SCAN_RADIUS ? MONSTER_RADIUS : BASE_SCAN_RADIUS;
-                    double sn = (free_zone_radius + 10) / (cur_drone.pos - new_m_pos).len();
-                    double cs = sqrt(1 - sn * sn);
-
-                    Vec2d rot(monster_dir.x * cs - monster_dir.y * sn, monster_dir.x * sn + monster_dir.y * cs);
-                    if (signbit(cross(rot, monster_dir)) != signbit(cross(target_dir, monster_dir))) {
-                        rot = Vec2d(monster_dir.x * cs + monster_dir.y * sn, monster_dir.y * cs - monster_dir.x * sn);
-                    }
-                    cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
-                    target = cur_drone.pos + Vec2i(rot);
-                    if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
-                        Vec2d d = target - cur_drone.pos;
-                        d.x += copysign(DRONE_SPEED, d.x);
-                        d.y += copysign(DRONE_SPEED, d.y);
-                        target = Vec2i(cur_drone.pos + d);
-                    }
-                    cerr << "(" << target << ") monster: " << m.id << " case 2\n";
+                auto monster_is_safe = [&](auto &m, Vec2d my_v) {
+                    auto v = my_v - m.vel;
+                    auto p = cur_drone.pos - m.pos;
+                    auto a = v * v;
+                    auto b = 2 * p * v;
+                    auto c = p * p - ((MONSTER_RADIUS + 2) * (MONSTER_RADIUS + 2));
+                    auto d = b * b - 4 * a * c;
+                    if (d < 0)
+                        return 1;
+                    double t1 = (-b - sqrt(d)) / (2 * a);
+                    double t2 = (-b + sqrt(d)) / (2 * a);
+                    if (t2 < 0 || t1 > 1)
+                        return 1;
+                    return 0;
+                };
+                Vec2d s = target - cur_drone.pos;
+                if (s.len() > DRONE_SPEED) {
+                    s = s.normalize() * DRONE_SPEED;
                 }
+                if (all_of(monsters.begin(), monsters.end(), [&](auto &m) {
+                    return monster_is_safe(m, s);
+                })) {
+                    cerr << "Drone " << cur_drone.id << " keeps direction\n";
+                    continue;
+                }
+
+                Vec2d best_s;
+                bool found = 0;
+                for (int i = 0; i < 360; ++i) {
+                    auto new_s = Vec2d(M_PI * i / 180) * DRONE_SPEED;
+                    bool ok = 1;
+                    for (auto &m : monsters) {
+                        if (!monster_is_safe(m, new_s)) {
+                            ok = 0;
+                            break;
+                        }
+                    }
+                    if (ok && (!found || s * best_s < s * new_s)) {
+                        found = 1;
+                        best_s = new_s;
+                    }
+                }
+                if (!found) {
+                    cerr << "Drone " << cur_drone.id << ": no safe direction\n";
+                } else {
+                    target = Vec2i(cur_drone.pos + best_s);
+                }
+                // for (auto &m : monsters) {
+                //     Vec2d s = m.vel;
+                //     if ((m.pos - cur_drone.pos).len() <= BASE_SCAN_RADIUS) {
+                //         s = (cur_drone.pos - m.pos).normalize() * MONSTER_SPEED;
+                //     }
+                //     Vec2i new_m_pos(m.pos + s);
+                //     if ((new_m_pos.x - cur_drone.pos.x) * (m.pos.x - cur_drone.pos.x) < 0) {
+                //         new_m_pos.x = cur_drone.pos.x;
+                //     }
+                //     if ((new_m_pos.y - cur_drone.pos.y) * (m.pos.y - cur_drone.pos.y) < 0) {
+                //         new_m_pos.y = cur_drone.pos.y;
+                //     }
+                //     cerr << "new pos = " << new_m_pos << " dist: " << (new_m_pos - cur_drone.pos).len() << "\n";
+                //     // if ((new_m_pos - cur_drone.pos).len() < LIGHT_SCAN_RADIUS && (new_m_pos - cur_drone.pos).len() > BASE_SCAN_RADIUS) {
+                //     //     light = 0;
+                //     // }
+                //     if ((cur_drone.pos - new_m_pos).len() <= MONSTER_RADIUS) {
+                //         if (new_m_pos == cur_drone.pos) {
+                //             new_m_pos = m.pos;
+                //         }
+                //         target = cur_drone.pos + Vec2i((cur_drone.pos - new_m_pos).normalize() * DRONE_SPEED);
+                //         if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
+                //             Vec2d d = target - cur_drone.pos;
+                //             d.x += copysign(DRONE_SPEED, d.x);
+                //             d.y += copysign(DRONE_SPEED, d.y);
+                //             target = Vec2i(cur_drone.pos + d);
+                //         }
+                //         cerr << "Monster too close, go to " << target << "\n";
+                //         break;
+                //     }
+                //     // if ((cur_drone.pos - new_m_pos).len() <= DANGER_RADIUS) {
+                //     //     Vec2d d = cur_drone.pos - new_m_pos;
+                //     //     d /= d.len();
+                //     //     cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
+                //     //     target = Vec2i(cur_drone.pos + d * DRONE_SPEED);
+                //     //     if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
+                //     //         d.x += copysign(DRONE_SPEED, d.x);
+                //     //         d.y += copysign(DRONE_SPEED, d.y);
+                //     //         target = Vec2i(cur_drone.pos + d * DRONE_SPEED);
+                //     //     }
+                //     //     cerr << "(" << target << ") monster: " << m.id << "\n";
+                //     //     continue;
+                //     // }
+                //     if ((target - new_m_pos).len() <= DANGER_RADIUS) {
+                //         Vec2d d = target - new_m_pos;
+                //         d /= d.len();
+                //         cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
+                //         target = Vec2i(new_m_pos + d * DANGER_RADIUS);
+                //         // if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
+                //         //     d = target - cur_drone.pos;
+                //         //     d.x += copysign(DRONE_SPEED, d.x);
+                //         //     d.y += copysign(DRONE_SPEED, d.y);
+                //         //     target = Vec2i(cur_drone.pos + d);
+                //         // }
+                //         cerr << "(" << target << ") monster: " << m.id << " case 1\n";
+                //         // continue;
+                //     }
+                //     auto target_dir = target - cur_drone.pos;
+                //     auto monster_dir = new_m_pos - cur_drone.pos;
+                //     cerr << "monster_dir = " << monster_dir << "\n";
+                //     cerr << "target_dir = " << target_dir << "\n";
+                //     if (monster_dir * target_dir >= target_dir * target_dir || monster_dir * target_dir <= 0)
+                //         continue;
+                //     auto dist = abs(cross(monster_dir, target_dir) / target_dir.len());
+                //     if (dist > DANGER_RADIUS)
+                //         continue;
+                //     double free_zone_radius = (cur_drone.pos - new_m_pos).len() < BASE_SCAN_RADIUS ? MONSTER_RADIUS : BASE_SCAN_RADIUS;
+                //     double sn = (free_zone_radius + 10) / (cur_drone.pos - new_m_pos).len();
+                //     double cs = sqrt(1 - sn * sn);
+
+                //     Vec2d rot(monster_dir.x * cs - monster_dir.y * sn, monster_dir.x * sn + monster_dir.y * cs);
+                //     if (signbit(cross(rot, monster_dir)) != signbit(cross(target_dir, monster_dir))) {
+                //         rot = Vec2d(monster_dir.x * cs + monster_dir.y * sn, monster_dir.y * cs - monster_dir.x * sn);
+                //     }
+                //     cerr << "Drone " << cur_drone.id << ": (" << target << ") -> ";
+                //     target = cur_drone.pos + Vec2i(rot);
+                //     if (target.x < 0 || target.x >= SIZE || target.y < 0 || target.y >= SIZE) {
+                //         Vec2d d = target - cur_drone.pos;
+                //         d.x += copysign(DRONE_SPEED, d.x);
+                //         d.y += copysign(DRONE_SPEED, d.y);
+                //         target = Vec2i(cur_drone.pos + d);
+                //     }
+                //     cerr << "(" << target << ") monster: " << m.id << " case 2\n";
+                // }
             }
         }
 
