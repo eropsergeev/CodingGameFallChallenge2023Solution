@@ -418,7 +418,7 @@ struct SmitsiMaxNode {
     }
 
     [[gnu::optimize("Os")]] void print(ostream &out, int t, int k = 0) {
-        out << string(k, '\t') << "time = " << t << "score = " << score << " visits = " << visits << " (" << score / visits << ")\n";
+        out << string(k, '\t') << "time = " << t << " score = " << score << " visits = " << visits << " (" << score / visits << ")\n";
         for (unsigned move = 0; move < SmitsiMaxNode::MOVES; ++move) {
             auto c = children[move];
             if (c) {
@@ -701,6 +701,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
 
         semi_have_id = have_id;
         semi_have = have;
+        foe_semi_have = foe_have;
 
         for (auto [d, f] : drone_scans) {
             auto [_, c, t] = fishes[f];
@@ -869,21 +870,21 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
                 if (foe_semi_have[c][t] || invalid[i])
                     initial_useless_fish[1][i] = 1;
             }
-            cerr << "possible_score: " << initial_possible_score[0] << " " << initial_possible_score[1] << "\n";
-            cerr << "color_cnt:\n";
-            for (auto &v : color_cnt) {
-                for (auto x : v) {
-                    cerr << x << " ";
-                }
-                cerr << "\n";
-            }
-            cerr << "type_cnt:\n";
-            for (auto &v : type_cnt) {
-                for (auto x : v) {
-                    cerr << x << " ";
-                }
-                cerr << "\n";
-            }
+            // cerr << "possible_score: " << initial_possible_score[0] << " " << initial_possible_score[1] << "\n";
+            // cerr << "color_cnt:\n";
+            // for (auto &v : color_cnt) {
+            //     for (auto x : v) {
+            //         cerr << x << " ";
+            //     }
+            //     cerr << "\n";
+            // }
+            // cerr << "type_cnt:\n";
+            // for (auto &v : type_cnt) {
+            //     for (auto x : v) {
+            //         cerr << x << " ";
+            //     }
+            //     cerr << "\n";
+            // }
             for (int p = 0; p < 2; ++p) {
                 for (int i = 0; i < COLORS; ++i) {
                     if (color_cnt[p][i] == TYPES) {
@@ -919,7 +920,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
         array<int, 2> min_score = {200, 200}, max_score = {0, 0};
         int iterations = 0;
         #ifdef DETERMINISTIC_MODE
-        while (iterations < 7000) {
+        while (iterations < 5000) {
         #else
         while (clock() - start < TIME_LIMIT) {
         #endif
@@ -956,9 +957,15 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
 
                 auto move_time = initial_move_time;
 
+                // cerr << "New iteration\n";
+                // cerr << "Start score: " << score[0] << " " << score[1] << "\n";
+                // cerr << "Start possible_score: " << possible_score[0] << " " << possible_score[1] << "\n";
+
+                int game_time = 0;
+
                 while (1) {
                     auto drone = min_element(move_time.begin(), move_time.end()) - move_time.begin();
-                    if (move_time[drone] >= MAX_TICK * DRONE_SPEED)
+                    if ((game_time = move_time[drone]) >= MAX_TICK * DRONE_SPEED)
                         break;
 
                     int player = drone & 1;
@@ -970,25 +977,40 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
                                 auto &[_, c, t] = flat_fishes[x];
                                 ++found_of_color[player][c];
                                 ++found_of_type[player][t];
+                                // cerr << "Player " << player << " get fish of color " << c << ", type " << t << "\n";
+                                // cerr << "Player " << !player << " possible_score -= " << fish_bonus_possible[!player][x] * (t + 1) << "\n";
                                 possible_score[!player] -= fish_bonus_possible[!player][x] * (t + 1);
-                                fish_bonus_possible[!player][x] = 0;
+                                fish_bonus_possible[0][x] = 0;
+                                fish_bonus_possible[1][x] = 0;
                                 int add = t + 1;
                                 if (!saved[!player][x]) {
+                                    // cerr << "Player " << player << " get bonus from fish: " << t + 1 << "\n";
                                     add *= 2;
                                 }
                                 bool foe_have_c = (found_of_color[!player][c] == TYPES);
                                 bool foe_have_t = (found_of_type[!player][t] == COLORS);
                                 if (found_of_color[player][c] == TYPES) {
                                     add += TYPES * (foe_have_c ? 1 : 2);
+                                    // if (!foe_have_c) {
+                                    //     cerr << "Player " << player << " get bonus from color: " << TYPES << "\n";
+                                    // }
                                     possible_score[!player] -= color_bonus_possible[!player][c] * TYPES;
-                                    color_bonus_possible[!player][c] = 0;
+                                    // cerr << "Player " << !player << " possible_score -= " << color_bonus_possible[!player][c] * TYPES << "\n";
+                                    color_bonus_possible[0][c] = 0;
+                                    color_bonus_possible[1][c] = 0;
                                 }
                                 if (found_of_type[player][t] == COLORS) {
                                     add += COLORS * (foe_have_t ? 1 : 2);
+                                    // if (!foe_have_t) {
+                                    //     cerr << "Player " << player << " get bonus from type: " << COLORS << "\n";
+                                    // }
                                     possible_score[!player] -= type_bonus_possible[!player][t] * COLORS;
-                                    type_bonus_possible[!player][t] = 0;
+                                    // cerr << "Player " << !player << " possible_score -= " << type_bonus_possible[!player][t] * COLORS << "\n";
+                                    type_bonus_possible[0][t] = 0;
+                                    type_bonus_possible[1][t] = 0;
                                 }
                                 score[player] += add;// * exp((tick - move_time[i]) * 0.007);
+                                // cerr << "Player " << player << " score += " << add << "\n";
                                 // if (iterations == 0 && i == 0 && player == 1) {
                                 //     cerr << c << " " << t << " +" << add << "\n";
                                 // }
@@ -1112,22 +1134,28 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
                             d = d.normalize() * LIGHT_SCAN_RADIUS;
                         }
                         Vec2i new_coord = flat_pos[best_move - 1] + Vec2i(d);
-                        move_time[drone] += max<int>((new_coord - coords[drone]).len(), 1);
+                        move_time[drone] += max<int>((new_coord - coords[drone]).len(), DRONE_SPEED);
                         coords[drone] = new_coord;
                         drone_scans[drone].emplace_back(best_move - 1);
                         used[player][best_move - 1] = 1;
                     }
                 }
 
+                constexpr int MAX_TIME = MAX_TICK * DRONE_SPEED;
+                game_time = min(game_time, MAX_TIME);
+
                 array<double, 2> normalized_scores;
                 for (int i = 0; i < 2; ++i) {
-                    if (score[i] > possible_score[!i])
+                    if (score[i] > score[!i])
                         normalized_scores[i] = 1;
                     else
-                        normalized_scores[i] = 0.5 * possible_score[i] / (possible_score[0] + possible_score[1]);
+                        normalized_scores[i] = 0.5 * game_time / MAX_TIME;
                 }
 
+                
+
                 for (int i = 0; i < 2; ++i) {
+                    assert(score[i] <= possible_score[i]);
                     sum_score[i] += score[i];
                     min_score[i] = min(min_score[i], score[i]);
                     max_score[i] = max(max_score[i], score[i]);
@@ -1156,18 +1184,17 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
             assert(max_score[i] <= initial_possible_score[i]);
         }
         cerr << "Nodes allocated: " << SmitsiMaxNode::allocated << "\n";
-        // if (SmitsiMaxNode::allocated < 50) {
-        //     int i = 0;
-        //     for (auto &[_, c, t] : flat_fishes) {
-        //         ++i;
-        //         cerr << i << ": " << c << " " << t << "\n";
-        //     }
-        //     for (int i = 0; i < 4; ++i)
-        //         roots[i]->print(cerr, initial_move_time[i]);
-        // }
-
         for (int i = 0; i < 4; ++i) {
             cerr << "Drone " << drone_to_id[i] << " root score: " << roots[i]->score / roots[i]->visits << "\n";
+        }
+        if (SmitsiMaxNode::allocated < 50) {
+            int i = 0;
+            for (auto &[_, c, t] : flat_fishes) {
+                ++i;
+                cerr << i << ": " << c << " " << t << "\n";
+            }
+            for (int i = 0; i < 4; ++i)
+                roots[i]->print(cerr, initial_move_time[i]);
         }
 
         for (int i = 0; i < 4; i += 2) {
