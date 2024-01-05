@@ -1107,8 +1107,13 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
                         move_time[drone] += max(DRONE_SPEED, coords[drone].y - SAVE_DEPTH);
                         coords[drone].y = SAVE_DEPTH;
                     } else {
-                        move_time[drone] += max<int>((flat_pos[best_move - 1] - coords[drone]).len() - LIGHT_SCAN_RADIUS, 1);
-                        coords[drone] = flat_pos[best_move - 1];
+                        Vec2d d = (coords[drone] - flat_pos[best_move - 1]);
+                        if (d.len() > LIGHT_SCAN_RADIUS) {
+                            d = d.normalize() * LIGHT_SCAN_RADIUS;
+                        }
+                        Vec2i new_coord = flat_pos[best_move - 1] + Vec2i(d);
+                        move_time[drone] += max<int>((new_coord - coords[drone]).len(), 1);
+                        coords[drone] = new_coord;
                         drone_scans[drone].emplace_back(best_move - 1);
                         used[player][best_move - 1] = 1;
                     }
@@ -1395,9 +1400,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
                         new_m_pos.y = cur_drone.pos.y;
                     }
                     cerr << "new pos = " << new_m_pos << " dist: " << (new_m_pos - cur_drone.pos).len() << "\n";
-                    if ((new_m_pos - cur_drone.pos).len() < LIGHT_SCAN_RADIUS && (new_m_pos - cur_drone.pos).len() > BASE_SCAN_RADIUS) {
-                        light = 0;
-                    }
+                    // if ((new_m_pos - cur_drone.pos).len() < LIGHT_SCAN_RADIUS && (new_m_pos - cur_drone.pos).len() > BASE_SCAN_RADIUS) {
+                    //     light = 0;
+                    // }
                     if ((cur_drone.pos - new_m_pos).len() <= MONSTER_RADIUS) {
                         if (new_m_pos == cur_drone.pos) {
                             new_m_pos = m.pos;
