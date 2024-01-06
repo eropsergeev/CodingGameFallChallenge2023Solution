@@ -85,27 +85,8 @@ int main() {
                 }
             }
         };
-        // {
-        //     unordered_map<string, int> cnt;
-        //     for (auto &l : labels) {
-        //         int v = 0;
-        //         size_t p = 0;
-        //         while (1) {
-        //             p = code.find(l, p);
-        //             if (p != string::npos) {
-        //                 p += l.size();
-        //                 ++v;
-        //             } else {
-        //                 break;
-        //             }
-        //         }
-        //         --v;
-        //         cnt[l] = v;
-        //     }
-        //     process(cnt);
-        // }
         int b = 0;
-        for (size_t l = 50; l > name.size() + 4; --l) {
+        for (size_t l = 50; l > name.size(); --l) {
             unordered_map<string, int> cnt;
             bool q1 = 0, q2 = 0;
             for (size_t i = 0; i < l; ++i) {
